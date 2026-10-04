@@ -6,20 +6,8 @@
 #include<stdlib.h>
 #include<fcntl.h>
 
-#define MAX_BUFFER_SIZE 1024
-#define MAX_TOKEN_BUFFER_SIZE 100
-#define MAX_COMMAND_SIZE 10
-#define MAX_COMMAND_ARGS_SIZE 10
-
-#define OK 1
-#define CONT 4
-#define ERROR -1
-
-typedef struct {
-    int in;
-    int out;
-} ORDER_NET[MAX_COMMAND_SIZE];
-ORDER_NET order_net;
+#include "define.h"
+#include "exect.h"
 
 int set_builtins(char* command_matrix[MAX_COMMAND_SIZE][MAX_COMMAND_ARGS_SIZE]);
 
@@ -28,18 +16,6 @@ int get_user_input(char buffer[MAX_BUFFER_SIZE]);
 int process_input_buffer(char buffer[MAX_BUFFER_SIZE], char* token_buffer[MAX_TOKEN_BUFFER_SIZE]);
 
 int process_token_buffer(int n_args[MAX_COMMAND_SIZE], int* n_comand, char* comand_matrix[MAX_COMMAND_SIZE][MAX_COMMAND_ARGS_SIZE], char* token_buffer[MAX_TOKEN_BUFFER_SIZE], int* has_infile, int* has_outfile, int* has_bgnd , int* has_append, int token_buffer_size, char** infile, char** outfile);
-
-int pipline(int has_bgnd, int has_infile, int has_outfile, int has_append, char* infile, char* outfile, int n_comand);
-
-void order_net_init();
-
-void execute(int n_args[MAX_COMMAND_SIZE], char* comand_matrix[MAX_COMMAND_SIZE][MAX_COMMAND_ARGS_SIZE], int has_bgnd, int has_infile, int has_outfile, int has_append, char* infile, char* outfile, int n_comand);
-
-int redirect_input(int i);
-
-int redirect_output(int i);
-
-int closeAll();
 
 int main(void) {
 
@@ -220,152 +196,6 @@ int process_token_buffer(int n_args[MAX_COMMAND_SIZE], int* n_comand, char* coma
 
     *n_comand = comand_index;
 
-    return OK;
-}
-
-void execute(int n_args[MAX_COMMAND_SIZE], char* comand_matrix[MAX_COMMAND_SIZE][MAX_COMMAND_ARGS_SIZE], int has_bgnd, int has_infile, int has_outfile, int has_append, char* infile, char* outfile, int n_comand) {
-    // load pipes and redirects in the file descriptor 
-    if(pipline(has_bgnd, has_infile, has_outfile, has_append, infile, outfile, n_comand) == ERROR) {
-        printf("Error in pipline\n");
-        return;
-    }
-    
-    // set the processes
-    for(int i = 0; i < n_comand; i++) {
-        pid_t ret = fork();
-        switch(ret) {
-            case ERROR:
-            printf("Fatal error creating the process\n");
-            break;
-            case 0:
-            redirect_input(i);
-            redirect_output(i);
-            closeAll();
-            if(execvp(comand_matrix[i][0], comand_matrix[i]) == ERROR) {
-                printf("An error has ocurred in the execution of file %s\n", comand_matrix[0][0]);
-                exit(0);
-            }
-            break;
-            default:
-            break;
-        }
-    }
-
-    closeAll();
-    
-    if(!has_bgnd) {
-        // wating all childs
-        for(int i = 0; i < n_comand; i++) {
-            if(wait(NULL) == ERROR) {
-                printf("An error was ocurred waiting a child process\n");
-            }
-        }
-    }
-}
-
-void order_net_init() {
-    for(int i = 0; i < MAX_COMMAND_SIZE; i++) {
-        order_net[i].in = STDIN_FILENO;
-        order_net[i].out = STDOUT_FILENO;
-    }
-}
-
-int pipline(int has_bgnd, int has_infile, int has_outfile, int has_append, char* infile, char* outfile, int n_comand) {
-    order_net_init();
-
-    int in = STDIN_FILENO, out = STDOUT_FILENO;
-
-    // openning /dev/null in bgnd mode
-    if(has_bgnd) {
-        in = open("/dev/null", O_RDONLY);
-        if(in == ERROR) {
-            printf("Error opnenning /dev/null\n");
-            return ERROR;
-        }
-    }
-
-    // openning infile in input file mode
-    if(has_infile) {
-        in = open(infile, O_RDONLY);
-        if(in == ERROR) {
-            printf("Error openning %s\n", infile);
-            return ERROR;
-        }
-    }
-
-    // openning outfile in output file mode
-    if(has_outfile) {
-        int mode = O_TRUNC;
-
-        if(has_append) mode = O_APPEND;
-
-        out = open(outfile, O_CREAT | O_WRONLY | mode, 0644);
-
-        if(out == ERROR) {
-            printf("Error openning %s\n", infile);
-            return ERROR;
-        }
-    }
-
-    order_net[0].in = in;
-    order_net[n_comand - 1].out = out;
-
-    // connecting pipes
-    for(int i = 0; i < n_comand - 1; i++) {
-        int fd[2];
-        if(pipe(fd) == ERROR) {
-            printf("Error creating piplining");
-            return ERROR;
-        }
-
-        order_net[i + 1].in = fd[0];
-        order_net[i].out = fd[1];
-    }
-
-    return OK;
-}
-
-int redirect_input(int i) {
-    if(order_net[i].in == STDIN_FILENO) return OK;
-
-    if(dup2(order_net[i].in, STDIN_FILENO) == ERROR) {
-        printf("Error editing file descriptor (input) in process %d with pid %ld\n", i, (long) getpid());
-        return ERROR;
-    }
-
-    return OK;
-}
-
-int redirect_output(int i) {
-    if(order_net[i].out == STDOUT_FILENO) return OK;
-
-    if(dup2(order_net[i].out, STDOUT_FILENO) == ERROR) {
-        printf("Error editing file descriptor (output) in process %d  with pid %ld\n", i, (long) getpid());
-        return ERROR;
-    }
-    
-    return OK;
-}
-
-int closeAll() {
-    for(int i = 0; i < MAX_COMMAND_SIZE; i++) {
-        if(order_net[i].in == STDIN_FILENO) continue;
-
-        if(close(order_net[i].in) == ERROR) {
-            printf("Error closing the input file at process %ld\n", (long) getpid());
-            return ERROR;
-        }
-    }
-
-    for(int i = 0; i < MAX_COMMAND_SIZE; i++) {
-        if(order_net[i].out == STDOUT_FILENO) continue;
-
-        if(close(order_net[i].out) == ERROR) {
-            printf("Error closing the output file at process %ld\n", (long) getpid());
-            return ERROR;
-        }
-    }
-    
     return OK;
 }
 
